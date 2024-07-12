@@ -5,7 +5,7 @@ module Generic (
     pubkeyValidation, addr6Validation, addr6FromText,
     Record (Record), address, pubkey, name,
     NS6Record (NS6Record), ns6Address, ns6Name,
-    State (State), names, tree, sesExpir, nT, tT, sT,
+    InitiatorChannel (InitiatorChannel), query, callback,
     recordToNS6Record,
     foldNothing
 ) where
@@ -113,15 +113,10 @@ recordToNS6Record r = case (addr6FromText . address $ r, name r) of
     (Just a, Just n) -> pure $ NS6Record a n 
     _ -> Nothing
 
-data State = State {
-    names :: TVar (Set NS6Record), nT :: TVar Int64,
-    tree :: TVar (Set HostAddress6), tT :: TVar Int64,
-    -- Sessions got block after replying n times
-    sesExpir :: TVar (Set Int32), sT :: TVar Int64
-}
 
 data InitiatorChannel = InitiatorChannel {
-    query :: TVar Text,
-    answer :: TVar HostAddress6
+    query :: Text,
+    -- Pass the channel itself into callback, who holds the responsibility for cleaning the channel
+    callback :: TMVar InitiatorChannel -> IO ()
 }
 

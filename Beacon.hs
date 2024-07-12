@@ -30,7 +30,7 @@ import Data.Serialize as DS
 import Data.Text.Encoding as TE
 
 data Protocol = Protocol {
-    -- 0 for query, 1 for answer, the rest reserved
+    -- 0 for query, 1 for answer, 2 for session kill
     pmsgType :: Int8,
     psesId :: Int32,
     -- Text cannot be serialized
@@ -60,18 +60,15 @@ instance Ord Session where
     compare :: Session -> Session -> Ordering
     compare s0 s1 = compare (ssesId s0) (ssesId s1)
 
-{-
-newState :: IO State
-newState = do
-    x0 <- e
-    x1 <- e
-    x2 <- e
-    x3 <- e
-    x4 <- e
-    State x0 x1 x2 x3 x4 <$> e
-    where e = newEmptyTVarIO
--}
+data State = State {
+    names :: TVar (Set NS6Record), nT :: TVar Int64,
+    tree :: TVar (Set HostAddress6), tT :: TVar Int64,
+    -- Sessions got block after replying n times
+    sesExpir :: TVar (Set Int32), sT :: TVar Int64
+}
 
+int32ToWord32 :: Int32 -> Word32
+int32ToWord32 (I32# i#) = W32# (int32ToWord32# i#)
 
 doQuery :: State -> Session -> IO ()
 doQuery st ss = do
@@ -83,15 +80,22 @@ doQuery st ss = do
         -- What about the scopeID? Let it be 0... 
         getSockAddr :: HostAddress6 -> SockAddr
         getSockAddr a = SockAddrInet6 internPort (int32ToWord32 . ssesId $ ss) a 0
-        int32ToWord32 :: Int32 -> Word32
-        int32ToWord32 (I32# i#) = W32# (int32ToWord32# i#)
         phrase :: B.ByteString
         phrase = DS.encode $ Protocol 0 (ssesId ss) (TE.encodeUtf8 . sname $ ss) Nothing
         sendBS :: B.ByteString -> Socket -> SockAddr -> IO ()
         sendBS b s a = sendTo s b a >> close s
 
-doResponse :: State -> Session -> IO ()
-doResponse = undefined
+doResponse :: Session -> IO ()
+doResponse ss = undefined where
+        getSockAddr :: HostAddress6 -> SockAddr 
+        getSockAddr a = SockAddrInet6 internPort (int32ToWord32 . ssesId $ ss) a 0
+        -- Fail if no address configured
+        phrase :: B.ByteString
+        phrase = DS.encode $ Protocol 1 (ssesId ss) (TE.encodeUtf8 . sname $ ss) (Just a) where
+            Just a = saddr ss
+
+doKill :: Session -> IO ()
+doKill = undefined
 
 -- On query, we create a new session if not expired
 -- On answer, we simply fill in the address
@@ -146,8 +150,8 @@ serverThread a ss st = do
 
 -- Workthread should work on state and sessions list
 -- There should be a mechanism for worker to notify upstream/initiator...
-workerThread :: a
-workerThread = undefined
+workerThread :: TMVar InitiatorChannel -> TVar (Set Session) -> State -> IO ()
+workerThread chan ss st = undefined
 
 
 refreshGeneralPeriodic :: (Ord a) => (Record -> Maybe a) -> IO (V.Vector Record) -> TVar (Set a) -> TVar Int64 -> IO ()
@@ -210,6 +214,17 @@ refreshThread s = do
 
             threadDelay delayTime
             doRefresh
+
+newState :: IO State 
+newState = do
+    names <- newTVarIO S.empty
+    tree  <- newTVarIO S.empty
+    sesExpir <- newTVarIO S.empty
+    tT <- newTVarIO 0
+    sT <- newTVarIO 0
+    nT <- newTVarIO 0
+    pure $ State names nT tree tT sesExpir sT
+
 
 debugStates :: State -> IO ()
 debugStates s = do
