@@ -114,9 +114,14 @@ recordToNS6Record r = case (addr6FromText . address $ r, name r) of
     _ -> Nothing
 
 data State = State {
-    names :: TMVar (Set NS6Record), nT :: TMVar Int64,
-    tree :: TMVar (Set HostAddress6), tT :: TMVar Int64,
+    names :: TVar (Set NS6Record), nT :: TVar Int64,
+    tree :: TVar (Set HostAddress6), tT :: TVar Int64,
     -- Sessions got block after replying n times
-    sesExpir :: TMVar (Set Int32), sT :: TMVar Int64
+    sesExpir :: TVar (Set Int32), sT :: TVar Int64
+}
+
+data InitiatorChannel = InitiatorChannel {
+    query :: TVar Text,
+    answer :: TVar HostAddress6
 }
 

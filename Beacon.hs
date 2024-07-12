@@ -60,6 +60,7 @@ instance Ord Session where
     compare :: Session -> Session -> Ordering
     compare s0 s1 = compare (ssesId s0) (ssesId s1)
 
+{-
 newState :: IO State
 newState = do
     x0 <- e
@@ -68,12 +69,14 @@ newState = do
     x3 <- e
     x4 <- e
     State x0 x1 x2 x3 x4 <$> e
-    where e = newEmptyTMVarIO
+    where e = newEmptyTVarIO
+-}
+
 
 doQuery :: State -> Session -> IO ()
 doQuery st ss = do
     s <- socket AF_INET6 Datagram defaultProtocol
-    tree <- atomically $ readTMVar (tree st)
+    tree <- readTVarIO (tree st)
     let addrs = getSockAddr <$> S.toList tree
     forM_ addrs (sendBS phrase s) where
         -- For the socket, use sessionId for flowinfo!
@@ -95,7 +98,7 @@ doResponse = undefined
 -- THE MAIN LOOP SHOULD ADD EXPIRED FLAG BEFORE REMOVING THE DEAD SESSION!
 -- The address should be derived from getSelf
 
-serverThread :: HostAddress6 -> TMVar (Set Session) -> State -> IO ()
+serverThread :: HostAddress6 -> TVar (Set Session) -> State -> IO ()
 serverThread a ss st = do
     s <- socket AF_INET6 Datagram defaultProtocol
     bind s $ getSockAddr a
@@ -114,27 +117,27 @@ serverThread a ss st = do
                 p :: (Either String Protocol) = DS.decode b
                 onQuery :: Protocol -> IO ()
                 onQuery p = do
-                    se <- atomically $ readTMVar (sesExpir st)
+                    se <- readTVarIO (sesExpir st)
                     unless (member (psesId p) se) (atomically $ do
-                        ss' <- readTMVar ss 
-                        writeTMVar ss $ insert newSession ss')  where
+                        ss' <- readTVar ss
+                        writeTVar ss $ insert newSession ss')  where
                         newSession = Session (psesId p) Nothing Nothing (decodeUtf8 . pname $ p) defaultSessionTTL
                 onResp :: Protocol -> IO ()
                 onResp p = do
                     let a = paddr p
-                    case a of 
+                    case a of
                         Nothing -> print "No address provided in response package, why?"
                         Just a' -> do
-                            se <- atomically $ readTMVar (sesExpir st)
-                            unless (member (psesId p) se) (atomically $ do  
-                                ss' <- readTMVar ss 
+                            se <- readTVarIO (sesExpir st)
+                            unless (member (psesId p) se) (atomically $ do
+                                ss' <- readTVar ss
                                 -- Will this work?
-                                let u = lookupGE (defaultSession . psesId $ p) ss' 
-                                case u of 
+                                let u = lookupGE (defaultSession . psesId $ p) ss'
+                                case u of
                                     Nothing -> pure ()
                                     -- No check on name here! Can be poisoned!
-                                    Just sess -> when (ssesId sess == psesId p) 
-                                        (writeTMVar ss $ insert (sess { saddr = Just a', sttl = sttl sess - 1 }) ss' ))
+                                    Just sess -> when (ssesId sess == psesId p)
+                                        (writeTVar ss $ insert (sess { saddr = Just a', sttl = sttl sess - 1 }) ss' ))
         serverLoop :: Socket -> IO ()
         serverLoop s = do
             (buf, SockAddrInet6 _ _ src _) <- NA.recvFrom s (fromIntegral maxRecvLength)
@@ -147,46 +150,46 @@ workerThread :: a
 workerThread = undefined
 
 
-refreshGeneralPeriodic :: (Ord a) => (Record -> Maybe a) -> IO (V.Vector Record) -> TMVar (Set a) -> TMVar Int64 -> IO ()
+refreshGeneralPeriodic :: (Ord a) => (Record -> Maybe a) -> IO (V.Vector Record) -> TVar (Set a) -> TVar Int64 -> IO ()
 refreshGeneralPeriodic trans populate r t = do
     x <- V.toList <$> populate
     let Just x' = foldNothing $ trans <$> x
     foldM_ insertSTM r x'
     updateTime
     where
-        insertSTM :: (Ord a) => TMVar (Set a) -> a -> IO (TMVar (Set a))
+        insertSTM :: (Ord a) => TVar (Set a) -> a -> IO (TVar (Set a))
         insertSTM l y = atomically $ do
-            l' <- readTMVar l
-            writeTMVar l . insert y $ l'
+            l' <- readTVar l
+            writeTVar l . insert y $ l'
             pure l -- Just for the type system to be happy
         updateTime :: IO ()
         updateTime = do
             CTime t' <- epochTime
-            atomically $ writeTMVar t (t' + refreshPeriod)
+            atomically $ writeTVar t (t' + refreshPeriod)
 
 
-refreshNamePeriodic :: TMVar (Set NS6Record) -> TMVar Int64 -> IO ()
+refreshNamePeriodic :: TVar (Set NS6Record) -> TVar Int64 -> IO ()
 refreshNamePeriodic = refreshGeneralPeriodic recordToNS6Record populateNames
 
-refreshTreePeriodic :: TMVar (Set HostAddress6) -> TMVar Int64 -> IO ()
+refreshTreePeriodic :: TVar (Set HostAddress6) -> TVar Int64 -> IO ()
 refreshTreePeriodic = refreshGeneralPeriodic (addr6FromText . address) populateTree
 
-refreshBlockedSession :: TMVar (Set Int32) -> TMVar Int64 -> IO ()
+refreshBlockedSession :: TVar (Set Int32) -> TVar Int64 -> IO ()
 refreshBlockedSession r t = do
-    atomically $ writeTMVar r S.empty
+    atomically $ writeTVar r S.empty
     CTime t' <- epochTime
-    atomically $ writeTMVar t (t' + refreshSessionsPeriod)
+    atomically $ writeTVar t (t' + refreshSessionsPeriod)
 
 -- At the call time states should be empty MVars
 refreshThread :: State -> IO ()
 refreshThread s = do
     -- Rewrite this ugly block later
-    atomically $ putTMVar (names s) S.empty
-    atomically $ putTMVar (tree s) S.empty
-    atomically $ putTMVar (sesExpir s) S.empty
-    atomically $ putTMVar (nT s) 0
-    atomically $ putTMVar (tT s) 0
-    atomically $ putTMVar (sT s) 0
+    atomically $ writeTVar (names s) S.empty
+    atomically $ writeTVar (tree s) S.empty
+    atomically $ writeTVar (sesExpir s) S.empty
+    atomically $ writeTVar (nT s) 0
+    atomically $ writeTVar (tT s) 0
+    atomically $ writeTVar (sT s) 0
     doRefresh
     where
         delayTime = 500 * 1000
@@ -196,13 +199,13 @@ refreshThread s = do
         doRefresh = do
             CTime ct <- epochTime
 
-            nt <- atomically $ readTMVar (nT s)
+            nt <- readTVarIO (nT s)
             when (ct >= nt) $ refreshNamePeriodic (names s) (nT s)
 
-            tt <- atomically $ readTMVar (tT s)
+            tt <- readTVarIO (tT s)
             when (ct >= tt) $ refreshTreePeriodic (tree s) (tT s)
 
-            st <- atomically $ readTMVar (tT s)
+            st <- readTVarIO (tT s)
             when (ct >= st) $ refreshBlockedSession (sesExpir s) (sT s)
 
             threadDelay delayTime
@@ -210,6 +213,6 @@ refreshThread s = do
 
 debugStates :: State -> IO ()
 debugStates s = do
-    atomically (readTMVar (names s)) >>= print
-    atomically (readTMVar (tree s)) >>= print
+    readTVarIO (names s) >>= print
+    readTVarIO (tree s) >>= print
 
